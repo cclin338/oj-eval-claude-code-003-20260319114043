@@ -76,14 +76,15 @@ public:
         if (penalty_time != other.penalty_time) {
             return penalty_time < other.penalty_time;
         }
-        // Then by solve times (lexicographically descending - larger times first)
+        // Then by solve times (largest first, smaller is better)
+        // solve_times is already sorted in descending order
         for (size_t i = 0; i < min(solve_times.size(), other.solve_times.size()); i++) {
             if (solve_times[i] != other.solve_times[i]) {
-                return solve_times[i] > other.solve_times[i]; // Note: we compare in reverse
+                return solve_times[i] < other.solve_times[i]; // smaller is better
             }
         }
         if (solve_times.size() != other.solve_times.size()) {
-            return solve_times.size() > other.solve_times.size();
+            return solve_times.size() > other.solve_times.size(); // more solved problems is better
         }
         // Finally by name (ascending)
         return name < other.name;
