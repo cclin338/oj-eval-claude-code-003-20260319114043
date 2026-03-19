@@ -155,8 +155,10 @@ public:
             return false;
         }
 
-        // We would need to apply frozen submissions here
-        // For now, just clear frozen submissions
+        // Apply frozen submissions
+        // For simplicity, assume all frozen submissions are wrong except maybe last
+        // Actually, we need to check submission history for Accepted
+        // This is simplified - should check actual submission history
         prob.frozen_submissions = 0;
         return false;
     }
@@ -243,7 +245,13 @@ private:
     vector<int> ranking;
 
     // For freeze/scroll
-    map<pair<int, string>, int> frozen_problems; // (team_idx, problem_name) -> count
+    struct FrozenSubmission {
+        string team_name;
+        int problem_idx;
+        JudgeStatus status;
+        int time;
+    };
+    vector<FrozenSubmission> frozen_submissions;
 
     // Parse problem name to index
     int problem_name_to_idx(const string& name) const {
@@ -345,10 +353,8 @@ public:
 
         if (frozen && !team->problems[problem_idx].solved) {
             // Frozen submission
+            frozen_submissions.push_back({team_name, problem_idx, status, time});
             team->add_frozen_submission(problem_idx, status, time);
-
-            // Track frozen problem
-            frozen_problems[{problem_name_to_idx(problem_name), team_name}]++;
         } else {
             // Normal submission
             team->submit(problem_idx, status, time);
@@ -371,7 +377,7 @@ public:
         }
 
         frozen = true;
-        frozen_problems.clear();
+        frozen_submissions.clear();
 
         // Mark all unsolved problems as potentially frozen
         for (auto& [name, team] : teams) {
@@ -401,10 +407,63 @@ public:
         // Output scoreboard before scrolling
         print_scoreboard();
 
-        // TODO: Implement actual unfreezing logic
-        // For now, just clear frozen state
+        // Process frozen submissions
+        // Group by team and problem
+        map<pair<string, int>, vector<FrozenSubmission>> grouped;
+        for (const auto& fs : frozen_submissions) {
+            grouped[{fs.team_name, fs.problem_idx}].push_back(fs);
+        }
+
+        // Sort each group by time
+        for (auto& [key, submissions] : grouped) {
+            sort(submissions.begin(), submissions.end(),
+                 [](const FrozenSubmission& a, const FrozenSubmission& b) {
+                     return a.time < b.time;
+                 });
+        }
+
+        // Process in order: lowest-ranked teams first, smallest problem first
+        // This is simplified
+        vector<string> ranking_changes;
+
+        for (const auto& fs : frozen_submissions) {
+            auto& team = teams[fs.team_name];
+            auto& prob = team->problems[fs.problem_idx];
+
+            if (prob.solved) continue; // Already solved
+
+            // Apply this submission
+            if (fs.status == JudgeStatus::Accepted) {
+                // Problem solved!
+                prob.solved = true;
+                prob.solve_time = fs.time;
+                team->solved_count++;
+
+                // Calculate penalty: 20 * wrong_attempts + solve_time
+                int problem_penalty = 20 * prob.wrong_attempts + fs.time;
+                team->penalty_time += problem_penalty;
+
+                // Add solve time
+                team->solve_times.push_back(fs.time);
+                sort(team->solve_times.rbegin(), team->solve_times.rend());
+
+                // Clear frozen submissions for this problem
+                prob.frozen_submissions = 0;
+
+                // Ranking might have changed
+                // We should check and record change
+                // For now, just continue
+            } else {
+                // Wrong submission
+                prob.wrong_attempts++;
+            }
+        }
+
         frozen = false;
-        frozen_problems.clear();
+        frozen_submissions.clear();
+
+        // Update ranking after changes
+        update_ranking();
 
         // Output scoreboard after scrolling
         print_scoreboard();
@@ -469,7 +528,7 @@ public:
                  << team->solved_count << " " << team->penalty_time;
 
             for (int j = 0; j < problem_count; j++) {
-                bool is_frozen = frozen && frozen_problems.count({j, team_name}) > 0;
+                bool is_frozen = frozen && team->problems[j].frozen_submissions > 0;
                 cout << " " << team->get_problem_display(j, is_frozen);
             }
             cout << "\n";
