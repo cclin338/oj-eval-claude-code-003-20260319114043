@@ -406,44 +406,53 @@ public:
         // Output scoreboard before scrolling
         print_scoreboard();
 
-        // Process scroll: unfreeze problems one by one
-        while (true) {
-            // Find lowest-ranked team with frozen problems
-            int lowest_team_idx = -1;
-            int lowest_problem_idx = -1;
+        // Track ranking changes
+        vector<string> ranking_changes;
 
-            for (size_t i = 0; i < ranking.size(); i++) {
-                int team_idx = ranking[i];
-                const string& team_name = team_order[team_idx];
+        // Process all frozen submissions
+        // First, collect all team+problem pairs that have frozen submissions
+        vector<tuple<string, int, vector<FrozenSubmission>>> to_process;
 
-                if (frozen_submissions.find(team_name) == frozen_submissions.end()) {
-                    continue;
+        for (auto& [team_name, problem_map] : frozen_submissions) {
+            for (auto& [problem_idx, submissions] : problem_map) {
+                if (!submissions.empty()) {
+                    // Sort submissions by time
+                    sort(submissions.begin(), submissions.end(),
+                         [](const FrozenSubmission& a, const FrozenSubmission& b) {
+                             return a.time < b.time;
+                         });
+                    to_process.emplace_back(team_name, problem_idx, move(submissions));
                 }
-
-                // Find smallest problem index with frozen submissions
-                for (int p = 0; p < problem_count; p++) {
-                    if (frozen_submissions[team_name].find(p) != frozen_submissions[team_name].end() &&
-                        !frozen_submissions[team_name][p].empty()) {
-                        lowest_team_idx = team_idx;
-                        lowest_problem_idx = p;
-                        break;
-                    }
-                }
-                if (lowest_team_idx != -1) break;
             }
+        }
 
-            if (lowest_team_idx == -1) break; // No more frozen problems
+        // Sort by team ranking (lowest first) and problem index (smallest first)
+        // We need team rankings
+        unordered_map<string, int> team_rank_map;
+        for (size_t i = 0; i < ranking.size(); i++) {
+            team_rank_map[team_order[ranking[i]]] = i;
+        }
 
-            string team_name = team_order[lowest_team_idx];
+        sort(to_process.begin(), to_process.end(),
+             [&](const auto& a, const auto& b) {
+                 const auto& [team_a, prob_a, _a] = a;
+                 const auto& [team_b, prob_b, _b] = b;
+
+                 int rank_a = team_rank_map[team_a];
+                 int rank_b = team_rank_map[team_b];
+
+                 if (rank_a != rank_b) {
+                     return rank_a > rank_b; // higher index = lower rank
+                 }
+                 return prob_a < prob_b; // smaller problem first
+             });
+
+        // Process in order
+        for (auto& [team_name, problem_idx, submissions] : to_process) {
             auto& team = teams[team_name];
-            auto& prob = team->problems[lowest_problem_idx];
+            auto& prob = team->problems[problem_idx];
 
-            // Get frozen submissions for this team+problem
-            auto& submissions = frozen_submissions[team_name][lowest_problem_idx];
-            sort(submissions.begin(), submissions.end(),
-                 [](const FrozenSubmission& a, const FrozenSubmission& b) {
-                     return a.time < b.time;
-                 });
+            if (prob.solved) continue;
 
             // Remember old ranking
             int old_rank = get_team_ranking(team_name);
@@ -451,7 +460,7 @@ public:
             // Apply submissions
             bool solved = false;
             for (const auto& fs : submissions) {
-                if (prob.solved) break; // Already solved
+                if (prob.solved) break;
 
                 if (fs.status == JudgeStatus::Accepted) {
                     // Problem solved!
@@ -468,16 +477,11 @@ public:
                     sort(team->solve_times.rbegin(), team->solve_times.rend());
 
                     solved = true;
+                    break; // Once solved, later submissions don't matter
                 } else {
                     // Wrong submission
                     prob.wrong_attempts++;
                 }
-            }
-
-            // Clear frozen submissions for this problem
-            frozen_submissions[team_name].erase(lowest_problem_idx);
-            if (frozen_submissions[team_name].empty()) {
-                frozen_submissions.erase(team_name);
             }
 
             // Update ranking
@@ -487,12 +491,18 @@ public:
             int new_rank = get_team_ranking(team_name);
             if (solved && new_rank != old_rank) {
                 // Find team that was at old_rank position
-                int displaced_team_idx = ranking[old_rank - 1]; // ranking is 0-based, old_rank is 1-based
+                int displaced_team_idx = ranking[old_rank - 1];
                 string displaced_team = team_order[displaced_team_idx];
 
-                cout << team_name << " " << displaced_team << " "
-                     << team->solved_count << " " << team->penalty_time << "\n";
+                ranking_changes.push_back(team_name + " " + displaced_team + " " +
+                                         to_string(team->solved_count) + " " +
+                                         to_string(team->penalty_time));
             }
+        }
+
+        // Output ranking changes
+        for (const auto& change : ranking_changes) {
+            cout << change << "\n";
         }
 
         frozen = false;
